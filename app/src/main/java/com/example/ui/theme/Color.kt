@@ -20,17 +20,19 @@ val CyanSecondaryDark = Color(0xFF82D2EC)
 val CyanOnSecondaryDark = Color(0xFF003542)
 val CyanSecondaryContainerDark = Color(0xFF004D5F)
 
-val NeutralBackgroundLight = Color(0xFFF8F9FA)
+val NeutralBackgroundLight = Color(0xFFF6F8FC)
 val NeutralSurfaceLight = Color(0xFFFFFFFF)
-val NeutralSurfaceVariantLight = Color(0xFFECEFF1)
+val NeutralSurfaceVariantLight = Color(0xFFECEFF4)
 
-val NeutralBackgroundDark = Color(0xFF101418)
-val NeutralSurfaceDark = Color(0xFF1B2026)
-val NeutralSurfaceVariantDark = Color(0xFF262D35)
+val NeutralBackgroundDark = Color(0xFF0F1419)
+val NeutralSurfaceDark = Color(0xFF1A2028)
+val NeutralSurfaceVariantDark = Color(0xFF252D38)
 
-// Status colors for delivery reports
+// Status colors for delivery reports & actions
 val StatusDelivered = Color(0xFF2E7D32)
 val StatusPending = Color(0xFFE65100)
 val StatusFailed = Color(0xFFC62828)
 val Sim1Color = Color(0xFF1E88E5)
 val Sim2Color = Color(0xFF00897B)
+val WhatsAppGreen = Color(0xFF25D366)
+val DirectCallBlue = Color(0xFF0288D1)

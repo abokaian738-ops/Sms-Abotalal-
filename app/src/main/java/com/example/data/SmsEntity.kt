@@ -9,12 +9,14 @@ import androidx.room.PrimaryKey
     indices = [
         Index("threadId"),
         Index("address"),
-        Index("date")
+        Index("date"),
+        Index(value = ["systemSmsId"], unique = true)
     ]
 )
 data class SmsEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
+    val systemSmsId: Long? = null,
     val threadId: Long,
     val address: String,
     val body: String,

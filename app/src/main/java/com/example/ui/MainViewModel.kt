@@ -1,19 +1,27 @@
 package com.example.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.BlockedNumberEntity
 import com.example.data.SmsRepository
+import com.example.model.ContactInfo
 import com.example.model.ConversationSummary
 import com.example.model.SimInfo
 import com.example.model.SmsMessage
+import com.example.telephony.ContactsHelper
 import com.example.telephony.TelephonyManagerHelper
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -21,8 +29,9 @@ data class MainUiState(
     val selectedAddress: String? = null,
     val selectedThreadId: Long? = null,
     val searchQuery: String = "",
-    val selectedFilterTab: Int = 0, // 0 = All, 1 = Unread, 2 = Blocked
+    val selectedFilterTab: Int = 0, // 0 = All, 1 = Unread
     val isDefaultSmsApp: Boolean = false,
+    val hasContactsPermission: Boolean = false,
     val activeSimCards: List<SimInfo> = emptyList(),
     val selectedSimSlotIndex: Int = 0,
     val deliveryReportsEnabled: Boolean = true,
@@ -31,10 +40,12 @@ data class MainUiState(
     val signatureText: String = "",
     val themeMode: Int = 0, // 0 = System, 1 = Light, 2 = Dark
     val isComposeDialogOpen: Boolean = false,
+    val prefillComposeText: String = "",
     val isSettingsOpen: Boolean = false,
     val isSyncing: Boolean = false
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = SmsRepository(application)
@@ -43,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(
         MainUiState(
             isDefaultSmsApp = TelephonyManagerHelper.isDefaultSmsApp(application),
+            hasContactsPermission = ContactsHelper.hasContactsPermission(application),
             activeSimCards = TelephonyManagerHelper.getActiveSimCards(application),
             deliveryReportsEnabled = prefs.deliveryReportsEnabled,
             customSmsc = prefs.customSmsc,
@@ -53,27 +65,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
+    private val _deviceContacts = MutableStateFlow<List<ContactInfo>>(emptyList())
+    val deviceContacts: StateFlow<List<ContactInfo>> = _deviceContacts.asStateFlow()
+
     val conversations: StateFlow<List<ConversationSummary>> = combine(
         repository.getConversationsFlow(),
-        _uiState
-    ) { list, state ->
+        _uiState.map { it.searchQuery to it.selectedFilterTab }.distinctUntilChanged()
+    ) { list, (query, filterTab) ->
         var filtered = list
-        if (state.searchQuery.isNotBlank()) {
-            val q = state.searchQuery.trim().lowercase()
+        if (query.isNotBlank()) {
+            val q = query.trim().lowercase()
             filtered = filtered.filter {
                 it.address.lowercase().contains(q) ||
-                (it.contactName?.lowercase()?.contains(q) == true) ||
-                it.snippet.lowercase().contains(q)
+                    (it.contactName?.lowercase()?.contains(q) == true) ||
+                    it.snippet.lowercase().contains(q)
             }
         }
-        when (state.selectedFilterTab) {
+        when (filterTab) {
             1 -> filtered.filter { it.unreadCount > 0 }
             else -> filtered
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _currentThreadMessages = MutableStateFlow<List<SmsMessage>>(emptyList())
-    val currentThreadMessages: StateFlow<List<SmsMessage>> = _currentThreadMessages.asStateFlow()
+    val currentThreadMessages: StateFlow<List<SmsMessage>> = _uiState
+        .map { it.selectedAddress }
+        .distinctUntilChanged()
+        .flatMapLatest { address ->
+            if (address.isNullOrBlank()) {
+                flowOf(emptyList())
+            } else {
+                repository.getMessagesForAddress(address)
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val blockedNumbers: StateFlow<List<BlockedNumberEntity>> =
         repository.getBlockedNumbersFlow()
@@ -81,17 +105,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshTelephonyState()
+        refreshContacts()
         syncSystemMessages()
     }
 
     fun refreshTelephonyState() {
         val app = getApplication<Application>()
         val isDefault = TelephonyManagerHelper.isDefaultSmsApp(app)
+        val hasContacts = ContactsHelper.hasContactsPermission(app)
         val sims = TelephonyManagerHelper.getActiveSimCards(app)
+        val currentSlot = _uiState.value.selectedSimSlotIndex
+        val safeSlot = if (sims.isNotEmpty() && currentSlot >= sims.size) 0 else currentSlot
+
         _uiState.value = _uiState.value.copy(
             isDefaultSmsApp = isDefault,
-            activeSimCards = sims
+            hasContactsPermission = hasContacts,
+            activeSimCards = sims,
+            selectedSimSlotIndex = safeSlot
         )
+    }
+
+    fun refreshContacts() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val hasPerm = ContactsHelper.hasContactsPermission(app)
+            _uiState.value = _uiState.value.copy(hasContactsPermission = hasPerm)
+            if (hasPerm) {
+                _deviceContacts.value = repository.loadDeviceContacts()
+            } else {
+                _deviceContacts.value = emptyList()
+            }
+        }
+    }
+
+    suspend fun resolvePickedContact(uri: Uri): ContactInfo? {
+        return repository.resolvePickedContact(uri)
     }
 
     fun syncSystemMessages() {
@@ -99,8 +147,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(isSyncing = true)
             try {
                 repository.syncWithSystemSms()
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: Exception) {
             } finally {
                 _uiState.value = _uiState.value.copy(isSyncing = false)
             }
@@ -114,9 +161,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         viewModelScope.launch {
             repository.markAddressAsRead(address)
-            repository.getMessagesForAddress(address).collect { messages ->
-                _currentThreadMessages.value = messages
-            }
         }
     }
 
@@ -125,7 +169,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedAddress = null,
             selectedThreadId = null
         )
-        _currentThreadMessages.value = emptyList()
     }
 
     fun setSearchQuery(query: String) {
@@ -147,20 +190,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val chosenSim = currentSims.getOrNull(selectedSlot) ?: currentSims.firstOrNull()
 
         viewModelScope.launch {
+            val cleanRecipient = recipient.trim()
             repository.sendMessage(
-                recipientAddress = recipient.trim(),
+                recipientAddress = cleanRecipient,
                 body = body.trim(),
                 simInfo = chosenSim
             )
-            // If starting a fresh message not in current thread, open thread
             if (_uiState.value.selectedAddress == null) {
-                val threadId = kotlin.math.abs(recipient.trim().hashCode().toLong())
-                selectConversation(recipient.trim(), threadId)
+                val threadId = kotlin.math.abs(cleanRecipient.hashCode().toLong())
+                selectConversation(cleanRecipient, threadId)
             }
         }
     }
 
-    fun deleteConversation(address: String, threadId: Long) {
+    fun deleteConversation(address: String) {
         viewModelScope.launch {
             repository.deleteAddress(address)
             if (_uiState.value.selectedAddress == address) {
@@ -208,8 +251,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(themeMode = mode)
     }
 
-    fun openComposeDialog(open: Boolean) {
-        _uiState.value = _uiState.value.copy(isComposeDialogOpen = open)
+    fun openComposeDialog(open: Boolean, prefillText: String = "") {
+        _uiState.value = _uiState.value.copy(
+            isComposeDialogOpen = open,
+            prefillComposeText = if (open) prefillText else ""
+        )
+        if (open) {
+            refreshContacts()
+        }
     }
 
     fun openSettings(open: Boolean) {

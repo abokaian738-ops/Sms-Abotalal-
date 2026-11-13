@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,13 +40,11 @@ import com.example.ui.theme.StatusDelivered
 import com.example.ui.theme.StatusFailed
 import com.example.ui.theme.StatusPending
 import com.example.ui.util.DateUtils
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageThreadScreen(
     address: String,
-    threadId: Long,
     messages: List<SmsMessage>,
     activeSims: List<SimInfo>,
     selectedSimSlotIndex: Int,
@@ -61,7 +58,6 @@ fun MessageThreadScreen(
     BackHandler { onBack() }
 
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     var textInput by remember { mutableStateOf("") }
@@ -72,21 +68,11 @@ fun MessageThreadScreen(
     val contactName = messages.firstOrNull()?.contactName
     val displayName = contactName ?: address
 
-    // Auto-scroll to latest message when messages change
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
-
-    // Quick templates
-    val quickTemplates = listOf(
-        "السلام عليكم ورحمة الله",
-        "شكراً جزيلاً",
-        "تم الاستلام بنجاح",
-        "سأتصل بك لاحقاً إن شاء الله",
-        "تمام، متفقين"
-    )
 
     // Character counter logic
     val isAscii = textInput.all { it.code < 128 }
@@ -201,34 +187,23 @@ fun MessageThreadScreen(
                     .imePadding()
                     .navigationBarsPadding()
             ) {
-                // Quick Replies Horizontal Bar
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(quickTemplates) { template ->
-                        SuggestionChip(
-                            onClick = { textInput = template },
-                            label = { Text(template, fontSize = 12.sp) }
-                        )
-                    }
-                }
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
 
                 // SIM Card Selector & Character Counter Bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Clickable SIM Selector Chip
                     if (currentSim != null) {
                         val simColor = if (currentSim.simSlotIndex == 0) Sim1Color else Sim2Color
                         Surface(
-                            onClick = { showSimPickerSheet = true },
+                            onClick = { if (activeSims.size > 1) showSimPickerSheet = true },
                             shape = RoundedCornerShape(12.dp),
                             color = simColor.copy(alpha = 0.15f),
                             modifier = Modifier.testTag("sim_selector_chip")
@@ -250,17 +225,24 @@ fun MessageThreadScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = simColor
                                 )
-                                Icon(
-                                    imageVector = Icons.Default.ArrowDropDown,
-                                    contentDescription = null,
-                                    tint = simColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                if (activeSims.size > 1) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = simColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
+                    } else {
+                        Text(
+                            text = "الشريحة الافتراضية للنظام",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
-                    // Live SMS Counter
                     Text(
                         text = "$charCount/$maxSinglePart • $smsParts SMS",
                         style = MaterialTheme.typography.labelSmall,
@@ -324,7 +306,6 @@ fun MessageThreadScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Delivery Reports Active Indicator
             if (deliveryReportsEnabled) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -351,7 +332,6 @@ fun MessageThreadScreen(
                 }
             }
 
-            // Message List
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -398,7 +378,9 @@ fun MessageThreadScreen(
                         shape = RoundedCornerShape(12.dp),
                         color = if (selectedSimSlotIndex == index) simColor.copy(alpha = 0.15f)
                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        border = if (selectedSimSlotIndex == index) androidx.compose.foundation.BorderStroke(2.dp, simColor) else null,
+                        border = if (selectedSimSlotIndex == index) {
+                            androidx.compose.foundation.BorderStroke(2.dp, simColor)
+                        } else null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
@@ -422,7 +404,7 @@ fun MessageThreadScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "مركز الرسائل SMSC: ${sim.smscNumber ?: "تلقائي"}",
+                                    text = "مركز الرسائل SMSC: ${sim.smscNumber ?: "تلقائي من الشريحة"}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -571,7 +553,7 @@ fun MessageBubble(
                                 DeliveryStatus.FAILED -> {
                                     Icon(
                                         imageVector = Icons.Default.ErrorOutline,
-                                        contentDescription = "فشل التسليم",
+                                        contentDescription = "فشل التسليم - اضغط لإعادة الإرسال",
                                         tint = StatusFailed,
                                         modifier = Modifier
                                             .size(16.dp)
@@ -585,7 +567,6 @@ fun MessageBubble(
                 }
             }
 
-            // Subtitle Carrier & Delivery status label
             if (isOutgoing) {
                 Row(
                     modifier = Modifier.padding(top = 2.dp, end = 4.dp),
@@ -604,6 +585,15 @@ fun MessageBubble(
                             color = StatusDelivered,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    } else if (message.deliveryStatus == DeliveryStatus.FAILED) {
+                        Text(
+                            text = " • فشل الإرسال (اضغط لإعادة المحاولة)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StatusFailed,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { onRetry() }
                         )
                     }
                 }

@@ -38,5 +38,11 @@
     <string name="quick_reply">رد سريع</string>
     <string name="mark_as_read">تعيين كمقروء</string>
     <string name="no_conversations">لا توجد رسائل حالياً</string>
-    <string name="no_conversations_desc">اضغط على زر الرسالة الجديدة للبدء في مراسلة أصدقائك</string>
+    <string name="no_conversations_desc">اضغط على زر الرسالة الجديدة للبدء في مراسلة جهات اتصالك</string>
+    <string name="pick_from_contacts">اختيار من جهات الاتصال</string>
+    <string name="developer_rights_title">حقوق المبرمج والمطور</string>
+    <string name="developer_name">عبدالحميد داوؤد</string>
+    <string name="developer_phone">778215553</string>
+    <string name="direct_call">اتصال مباشر</string>
+    <string name="whatsapp_contact">واتساب</string>
 </resources>

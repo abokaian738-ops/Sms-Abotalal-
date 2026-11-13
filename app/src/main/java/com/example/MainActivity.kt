@@ -15,11 +15,17 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.telephony.TelephonyManagerHelper
-import com.example.ui.*
+import com.example.ui.ComposeMessageDialog
+import com.example.ui.ConversationListScreen
+import com.example.ui.MainViewModel
+import com.example.ui.MessageThreadScreen
+import com.example.ui.SettingsScreen
 import com.example.ui.theme.TalalSmsTheme
 
 class MainActivity : ComponentActivity() {
@@ -33,35 +39,40 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            val uiState by viewModel.uiState.collectAsState()
-            val conversations by viewModel.conversations.collectAsState()
-            val threadMessages by viewModel.currentThreadMessages.collectAsState()
-            val blockedNumbers by viewModel.blockedNumbers.collectAsState()
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val conversations by viewModel.conversations.collectAsStateWithLifecycle()
+            val threadMessages by viewModel.currentThreadMessages.collectAsStateWithLifecycle()
+            val blockedNumbers by viewModel.blockedNumbers.collectAsStateWithLifecycle()
+            val deviceContacts by viewModel.deviceContacts.collectAsStateWithLifecycle()
 
-            // Dynamic Dark/Light Theme based on user setting
             val isDark = when (uiState.themeMode) {
                 1 -> false
                 2 -> true
                 else -> isSystemInDarkTheme()
             }
 
-            // Permissions Launcher
             val permissionsLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestMultiplePermissions()
-            ) { results ->
+            ) {
                 viewModel.refreshTelephonyState()
+                viewModel.refreshContacts()
                 viewModel.syncSystemMessages()
             }
 
-            // Default SMS App Launcher
+            val contactsPermissionLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestPermission()
+            ) {
+                viewModel.refreshContacts()
+            }
+
             val defaultSmsLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.StartActivityForResult()
             ) {
                 viewModel.refreshTelephonyState()
+                viewModel.syncSystemMessages()
             }
 
             LaunchedEffect(Unit) {
-                // Request runtime permissions on first launch
                 val requiredPermissions = mutableListOf(
                     Manifest.permission.RECEIVE_SMS,
                     Manifest.permission.READ_SMS,
@@ -105,7 +116,6 @@ class MainActivity : ComponentActivity() {
                         uiState.selectedAddress != null -> {
                             MessageThreadScreen(
                                 address = uiState.selectedAddress!!,
-                                threadId = uiState.selectedThreadId ?: 0L,
                                 messages = threadMessages,
                                 activeSims = uiState.activeSimCards,
                                 selectedSimSlotIndex = uiState.selectedSimSlotIndex,
@@ -116,10 +126,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onBack = { viewModel.clearSelectedConversation() },
                                 onDeleteThread = {
-                                    viewModel.deleteConversation(
-                                        uiState.selectedAddress!!,
-                                        uiState.selectedThreadId ?: 0L
-                                    )
+                                    viewModel.deleteConversation(uiState.selectedAddress!!)
                                 },
                                 onBlockNumber = { viewModel.blockNumber(it) }
                             )
@@ -132,8 +139,8 @@ class MainActivity : ComponentActivity() {
                                 onSelectConversation = { address, threadId ->
                                     viewModel.selectConversation(address, threadId)
                                 },
-                                onDeleteConversation = { address, threadId ->
-                                    viewModel.deleteConversation(address, threadId)
+                                onDeleteConversation = { address ->
+                                    viewModel.deleteConversation(address)
                                 },
                                 onBlockNumber = { viewModel.blockNumber(it) },
                                 onOpenCompose = { viewModel.openComposeDialog(true) },
@@ -149,11 +156,19 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Compose New Message Dialog
                     if (uiState.isComposeDialogOpen) {
                         ComposeMessageDialog(
                             activeSims = uiState.activeSimCards,
                             selectedSimSlotIndex = uiState.selectedSimSlotIndex,
+                            contacts = deviceContacts,
+                            hasContactsPermission = uiState.hasContactsPermission,
+                            prefillText = uiState.prefillComposeText,
+                            onRequestContactsPermission = {
+                                contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                            },
+                            onResolvePickedContact = { uri ->
+                                viewModel.resolvePickedContact(uri)
+                            },
                             onSelectSimSlot = { viewModel.setSelectedSimSlot(it) },
                             onSend = { recipient, body ->
                                 viewModel.sendMessage(recipient, body)
@@ -175,21 +190,23 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshTelephonyState()
+        viewModel.refreshContacts()
     }
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
         val action = intent.action
 
-        // Check if opened from notification
         val threadId = intent.getLongExtra("EXTRA_THREAD_ID", -1L)
         val address = intent.getStringExtra("EXTRA_ADDRESS")
         if (!address.isNullOrBlank()) {
-            viewModel.selectConversation(address, if (threadId != -1L) threadId else kotlin.math.abs(address.hashCode().toLong()))
+            viewModel.selectConversation(
+                address,
+                if (threadId != -1L) threadId else kotlin.math.abs(address.hashCode().toLong())
+            )
             return
         }
 
-        // Check if opened via SEND or SENDTO (e.g. sms:0501234567 or smsto:0501234567)
         if (action == Intent.ACTION_SENDTO || action == Intent.ACTION_VIEW) {
             val uri: Uri? = intent.data
             if (uri != null) {
@@ -205,7 +222,7 @@ class MainActivity : ComponentActivity() {
         } else if (action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
             if (!sharedText.isNullOrBlank()) {
-                viewModel.openComposeDialog(true)
+                viewModel.openComposeDialog(true, sharedText)
             }
         }
     }

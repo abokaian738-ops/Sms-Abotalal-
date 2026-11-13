@@ -24,93 +24,96 @@ class SmsDeliveryReceiver : BroadcastReceiver() {
         val db = TalalSmsDatabase.getInstance(context)
         val dao = db.smsDao()
         val prefs = SmsPreferences(context)
+        val pendingResult = goAsync()
 
-        when (action) {
-            ACTION_SMS_SENT -> {
-                val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
-                if (messageId != -1L) {
-                    val status = when (resultCode) {
-                        Activity.RESULT_OK -> DeliveryStatus.SENT.code
-                        SmsManager.RESULT_ERROR_GENERIC_FAILURE,
-                        SmsManager.RESULT_ERROR_NO_SERVICE,
-                        SmsManager.RESULT_ERROR_NULL_PDU,
-                        SmsManager.RESULT_ERROR_RADIO_OFF -> DeliveryStatus.FAILED.code
-                        else -> DeliveryStatus.FAILED.code
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                when (action) {
+                    ACTION_SMS_SENT -> {
+                        val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
+                        if (messageId != -1L) {
+                            val isSuccess = (resultCode == Activity.RESULT_OK)
+                            val status = if (isSuccess) DeliveryStatus.SENT.code else DeliveryStatus.FAILED.code
+                            val type = if (isSuccess) SmsEntity.TYPE_SENT else SmsEntity.TYPE_FAILED
+                            dao.updateDeliveryAndType(messageId, status, type)
+                        }
                     }
-                    CoroutineScope(Dispatchers.IO).launch {
-                        dao.updateDeliveryStatus(messageId, status)
-                    }
-                }
-            }
 
-            ACTION_SMS_DELIVERED -> {
-                val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
-                if (messageId != -1L) {
-                    val isDelivered = (resultCode == Activity.RESULT_OK)
-                    val status = if (isDelivered) {
-                        DeliveryStatus.DELIVERED.code
-                    } else {
-                        DeliveryStatus.FAILED.code
+                    ACTION_SMS_DELIVERED -> {
+                        val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
+                        if (messageId != -1L) {
+                            val isDelivered = (resultCode == Activity.RESULT_OK)
+                            val status = if (isDelivered) {
+                                DeliveryStatus.DELIVERED.code
+                            } else {
+                                DeliveryStatus.FAILED.code
+                            }
+                            dao.updateDeliveryStatus(messageId, status)
+                            val msg = dao.getMessageById(messageId)
+                            if (msg != null && prefs.deliveryReportsEnabled) {
+                                NotificationHelper.showDeliveryReportNotification(
+                                    context = context,
+                                    recipient = msg.address,
+                                    delivered = isDelivered
+                                )
+                            }
+                        }
                     }
-                    CoroutineScope(Dispatchers.IO).launch {
-                        dao.updateDeliveryStatus(messageId, status)
-                        val msg = dao.getMessageById(messageId)
-                        if (msg != null && prefs.deliveryReportsEnabled) {
-                            NotificationHelper.showDeliveryReportNotification(
-                                context = context,
-                                recipient = msg.address,
-                                delivered = isDelivered
+
+                    ACTION_MARK_READ -> {
+                        val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
+                        val address = intent.getStringExtra(EXTRA_ADDRESS)
+                        if (!address.isNullOrBlank()) {
+                            dao.markAddressAsRead(address)
+                        } else if (threadId != -1L) {
+                            dao.markThreadAsRead(threadId)
+                        }
+                        if (threadId != -1L) {
+                            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            nm.cancel(threadId.toInt())
+                        }
+                    }
+
+                    ACTION_QUICK_REPLY -> {
+                        val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return@launch
+                        val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
+                        val results = RemoteInput.getResultsFromIntent(intent)
+                        val replyText = results?.getCharSequence(NotificationHelper.KEY_TEXT_REPLY)?.toString()
+
+                        if (!replyText.isNullOrBlank()) {
+                            val newMsg = SmsEntity(
+                                threadId = if (threadId > 0) threadId else kotlin.math.abs(address.hashCode().toLong()),
+                                address = address,
+                                body = replyText.trim(),
+                                date = System.currentTimeMillis(),
+                                type = SmsEntity.TYPE_OUTBOX,
+                                subId = prefs.preferredSubId,
+                                carrierName = "رد سريع",
+                                deliveryStatus = DeliveryStatus.PENDING.code,
+                                read = true
                             )
+                            val id = dao.insertMessage(newMsg)
+                            val sent = SmsSenderHelper.sendSms(
+                                context = context,
+                                destinationAddress = address,
+                                text = replyText.trim(),
+                                messageId = id,
+                                subId = prefs.preferredSubId,
+                                smscAddress = prefs.customSmsc.ifBlank { null },
+                                requestDeliveryReport = prefs.deliveryReportsEnabled
+                            )
+                            if (!sent) {
+                                dao.updateDeliveryAndType(id, DeliveryStatus.FAILED.code, SmsEntity.TYPE_FAILED)
+                            }
+                        }
+                        if (threadId > 0) {
+                            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            nm.cancel(threadId.toInt())
                         }
                     }
                 }
-            }
-
-            ACTION_MARK_READ -> {
-                val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
-                if (threadId != -1L) {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        dao.markThreadAsRead(threadId)
-                    }
-                    val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    notificationManager.cancel(threadId.toInt())
-                }
-            }
-
-            ACTION_QUICK_REPLY -> {
-                val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return
-                val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
-                val results = RemoteInput.getResultsFromIntent(intent)
-                val replyText = results?.getCharSequence(NotificationHelper.KEY_TEXT_REPLY)?.toString()
-
-                if (!replyText.isNullOrBlank()) {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val newMsg = SmsEntity(
-                            threadId = if (threadId > 0) threadId else System.currentTimeMillis(),
-                            address = address,
-                            body = replyText,
-                            date = System.currentTimeMillis(),
-                            type = SmsEntity.TYPE_OUTBOX,
-                            subId = prefs.preferredSubId,
-                            carrierName = "إرسال سريع",
-                            deliveryStatus = DeliveryStatus.PENDING.code,
-                            read = true
-                        )
-                        val id = dao.insertMessage(newMsg)
-                        SmsSenderHelper.sendSms(
-                            context = context,
-                            destinationAddress = address,
-                            text = replyText,
-                            messageId = id,
-                            subId = prefs.preferredSubId,
-                            requestDeliveryReport = prefs.deliveryReportsEnabled
-                        )
-                    }
-                    val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    if (threadId > 0) {
-                        notificationManager.cancel(threadId.toInt())
-                    }
-                }
+            } finally {
+                pendingResult.finish()
             }
         }
     }

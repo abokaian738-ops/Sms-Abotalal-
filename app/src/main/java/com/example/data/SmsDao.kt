@@ -22,17 +22,26 @@ interface SmsDao {
     @Query("SELECT * FROM sms_messages WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: Long): SmsEntity?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM sms_messages WHERE address = :address AND date = :date AND body = :body)")
+    suspend fun existsByContent(address: String, date: Long, body: String): Boolean
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: SmsEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessages(messages: List<SmsEntity>): List<Long>
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMessagesIgnore(messages: List<SmsEntity>): List<Long>
 
     @Update
     suspend fun updateMessage(message: SmsEntity)
 
+    @Query("UPDATE sms_messages SET systemSmsId = :systemSmsId WHERE id = :id")
+    suspend fun updateSystemSmsId(id: Long, systemSmsId: Long)
+
     @Query("UPDATE sms_messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
+
+    @Query("UPDATE sms_messages SET deliveryStatus = :status, type = :type WHERE id = :messageId")
+    suspend fun updateDeliveryAndType(messageId: Long, status: Int, type: Int)
 
     @Query("UPDATE sms_messages SET read = 1 WHERE threadId = :threadId")
     suspend fun markThreadAsRead(threadId: Long)

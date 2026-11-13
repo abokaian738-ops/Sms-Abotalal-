@@ -19,7 +19,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -28,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.ConversationSummary
 import com.example.model.DeliveryStatus
-import com.example.model.SimInfo
 import com.example.ui.theme.Sim1Color
 import com.example.ui.theme.Sim2Color
 import com.example.ui.theme.StatusDelivered
@@ -42,7 +40,7 @@ fun ConversationListScreen(
     conversations: List<ConversationSummary>,
     uiState: MainUiState,
     onSelectConversation: (address: String, threadId: Long) -> Unit,
-    onDeleteConversation: (address: String, threadId: Long) -> Unit,
+    onDeleteConversation: (address: String) -> Unit,
     onBlockNumber: (number: String) -> Unit,
     onOpenCompose: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -53,6 +51,7 @@ fun ConversationListScreen(
 ) {
     val context = LocalContext.current
     var isSearchActive by remember { mutableStateOf(false) }
+    var showDeveloperDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -64,7 +63,7 @@ fun ConversationListScreen(
                                 imageVector = Icons.Default.Chat,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
@@ -100,6 +99,15 @@ fun ConversationListScreen(
                                     contentDescription = "مزامنة الرسائل"
                                 )
                             }
+                        }
+                        IconButton(
+                            onClick = { showDeveloperDialog = true },
+                            modifier = Modifier.testTag("developer_info_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = "حقوق المبرمج والمطور"
+                            )
                         }
                         IconButton(
                             onClick = onOpenSettings,
@@ -161,7 +169,7 @@ fun ConversationListScreen(
                                 imageVector = Icons.Default.Shield,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(30.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -196,7 +204,7 @@ fun ConversationListScreen(
                             .padding(horizontal = 16.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(uiState.activeSimCards) { sim ->
+                        items(uiState.activeSimCards, key = { it.subscriptionId }) { sim ->
                             val simColor = if (sim.simSlotIndex == 0) Sim1Color else Sim2Color
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
@@ -291,7 +299,7 @@ fun ConversationListScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "اضغط على زر 'رسالة جديدة' في الأسفل لبدء المحادثة",
+                        text = "اضغط على 'رسالة جديدة' لاختيار جهة اتصال وبدء المحادثة، أو اضغط على أيقونة المزامنة لاستيراد رسائل الهاتف",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -306,12 +314,12 @@ fun ConversationListScreen(
             ) {
                 items(
                     items = conversations,
-                    key = { it.threadId.toString() + "_" + it.address }
+                    key = { it.address }
                 ) { conv ->
                     ConversationItem(
                         conversation = conv,
                         onClick = { onSelectConversation(conv.address, conv.threadId) },
-                        onDelete = { onDeleteConversation(conv.address, conv.threadId) },
+                        onDelete = { onDeleteConversation(conv.address) },
                         onCall = {
                             try {
                                 val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${conv.address}"))
@@ -330,6 +338,19 @@ fun ConversationListScreen(
                 }
             }
         }
+    }
+
+    if (showDeveloperDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeveloperDialog = false },
+            title = { Text("حقوق المبرمج والمطور", fontWeight = FontWeight.Bold) },
+            text = { DeveloperRightsCard(context = context) },
+            confirmButton = {
+                TextButton(onClick = { showDeveloperDialog = false }) {
+                    Text("إغلاق")
+                }
+            }
+        )
     }
 }
 
@@ -354,7 +375,6 @@ fun ConversationItem(
             .testTag("conversation_item_${conversation.address}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar with Contact Initials
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -376,7 +396,6 @@ fun ConversationItem(
 
         Spacer(modifier = Modifier.width(14.dp))
 
-        // Content: Name, Snippet, Time
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -406,7 +425,6 @@ fun ConversationItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Outgoing Delivery Status Tick if applicable
                 DeliveryStatusIcon(status = DeliveryStatus.fromCode(conversation.lastDeliveryStatus))
 
                 Text(
@@ -435,7 +453,6 @@ fun ConversationItem(
             }
         }
 
-        // Context Menu
         Box {
             IconButton(onClick = { showMenu = true }) {
                 Icon(

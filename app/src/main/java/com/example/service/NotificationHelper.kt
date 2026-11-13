@@ -1,15 +1,19 @@
 package com.example.service
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.data.SmsPreferences
 import com.example.receiver.SmsDeliveryReceiver
 
 object NotificationHelper {
@@ -17,6 +21,17 @@ object NotificationHelper {
     const val CHANNEL_SMS = "talal_sms_messages"
     const val CHANNEL_DELIVERY = "talal_sms_delivery"
     const val KEY_TEXT_REPLY = "key_text_reply"
+
+    private fun canPostNotifications(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
 
     fun createNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -54,31 +69,34 @@ object NotificationHelper {
         threadId: Long,
         carrierName: String
     ) {
+        if (!canPostNotifications(context)) return
         createNotificationChannels(context)
 
+        val prefs = SmsPreferences(context)
         val displayName = senderName ?: senderNumber
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("EXTRA_THREAD_ID", threadId)
             putExtra("EXTRA_ADDRESS", senderNumber)
         }
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val immutableFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         } else {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
-        val contentPI = PendingIntent.getActivity(context, threadId.toInt(), openIntent, flags)
+        val contentPI = PendingIntent.getActivity(context, threadId.toInt(), openIntent, immutableFlags)
 
         // Mark as Read Action
         val markReadIntent = Intent(context, SmsDeliveryReceiver::class.java).apply {
             action = SmsDeliveryReceiver.ACTION_MARK_READ
             putExtra(SmsDeliveryReceiver.EXTRA_THREAD_ID, threadId)
+            putExtra(SmsDeliveryReceiver.EXTRA_ADDRESS, senderNumber)
         }
         val markReadPI = PendingIntent.getBroadcast(
             context,
             (threadId * 10).toInt(),
             markReadIntent,
-            flags
+            immutableFlags
         )
 
         // Remote Input for Quick Reply
@@ -91,15 +109,16 @@ object NotificationHelper {
             putExtra(SmsDeliveryReceiver.EXTRA_ADDRESS, senderNumber)
             putExtra(SmsDeliveryReceiver.EXTRA_THREAD_ID, threadId)
         }
+        val replyFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
         val replyPI = PendingIntent.getBroadcast(
             context,
             (threadId * 10 + 1).toInt(),
             replyIntent,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
+            replyFlags
         )
 
         val replyAction = NotificationCompat.Action.Builder(
@@ -114,6 +133,10 @@ object NotificationHelper {
             markReadPI
         ).build()
 
+        var defaults = 0
+        if (prefs.soundEnabled) defaults = defaults or NotificationCompat.DEFAULT_SOUND
+        if (prefs.vibrateEnabled) defaults = defaults or NotificationCompat.DEFAULT_VIBRATE
+
         val notification = NotificationCompat.Builder(context, CHANNEL_SMS)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(displayName)
@@ -122,13 +145,17 @@ object NotificationHelper {
             .setStyle(NotificationCompat.BigTextStyle().bigText(messageBody))
             .setContentIntent(contentPI)
             .setAutoCancel(true)
+            .setDefaults(defaults)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(replyAction)
             .addAction(markReadAction)
             .build()
 
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(threadId.toInt(), notification)
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(threadId.toInt(), notification)
+        } catch (_: SecurityException) {
+        }
     }
 
     fun showDeliveryReportNotification(
@@ -136,6 +163,7 @@ object NotificationHelper {
         recipient: String,
         delivered: Boolean
     ) {
+        if (!canPostNotifications(context)) return
         createNotificationChannels(context)
 
         val title = if (delivered) "تم تسليم الرسالة بنجاح ✓✓" else "تعذر تسليم الرسالة"
@@ -153,7 +181,10 @@ object NotificationHelper {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify((System.currentTimeMillis() % 100000).toInt(), notification)
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify((System.currentTimeMillis() % 100000).toInt(), notification)
+        } catch (_: SecurityException) {
+        }
     }
 }

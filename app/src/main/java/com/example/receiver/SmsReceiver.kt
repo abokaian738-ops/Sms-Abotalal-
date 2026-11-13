@@ -1,6 +1,7 @@
 package com.example.receiver
 
 import android.content.BroadcastReceiver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,7 @@ import android.telephony.SmsMessage as AndroidSmsMessage
 import com.example.data.SmsEntity
 import com.example.data.TalalSmsDatabase
 import com.example.service.NotificationHelper
+import com.example.telephony.ContactsHelper
 import com.example.telephony.TelephonyManagerHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,33 +21,43 @@ class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        if (action != Telephony.Sms.Intents.SMS_DELIVER_ACTION &&
-            action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION
-        ) {
+        val isDeliver = action == Telephony.Sms.Intents.SMS_DELIVER_ACTION
+        val isReceived = action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION
+        if (!isDeliver && !isReceived) return
+
+        // Avoid duplicate processing when app is already the default SMS app (which receives SMS_DELIVER)
+        if (isReceived && TelephonyManagerHelper.isDefaultSmsApp(context)) {
             return
         }
 
         val messages: Array<AndroidSmsMessage>? = try {
             Telephony.Sms.Intents.getMessagesFromIntent(intent)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
-
         if (messages.isNullOrEmpty()) return
 
-        val subId = intent.getIntExtra("subscription", intent.getIntExtra("slot", -1))
+        val subId = extractSubscriptionId(intent)
         val db = TalalSmsDatabase.getInstance(context)
         val dao = db.smsDao()
 
-        // Group message parts by originating address
-        val messagesBySender = messages.groupBy { it.displayOriginatingAddress ?: it.originatingAddress ?: "غير معروف" }
+        val messagesBySender = messages.groupBy {
+            it.displayOriginatingAddress ?: it.originatingAddress ?: "غير معروف"
+        }
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val activeSims = TelephonyManagerHelper.getActiveSimCards(context)
+                val matchingSim = activeSims.firstOrNull { it.subscriptionId == subId }
+                val carrierName = matchingSim?.carrierName
+                    ?: if (subId > 0) "شريحة $subId" else "شبكة الجوال"
+
                 for ((sender, messageList) in messagesBySender) {
-                    // Check if sender is blocked
-                    if (dao.isNumberBlocked(sender)) {
+                    val normalizedSender = ContactsHelper.normalizePhoneNumber(sender)
+                    if (dao.isNumberBlocked(sender) ||
+                        (normalizedSender.isNotEmpty() && dao.isNumberBlocked(normalizedSender))
+                    ) {
                         continue
                     }
 
@@ -56,28 +68,9 @@ class SmsReceiver : BroadcastReceiver() {
                     }
                     val timestamp = messageList.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
                     val smsc = messageList.firstOrNull()?.serviceCenterAddress
-
-                    // Carrier label
-                    val carrierName = if (subId > 0) "شريحة $subId" else "شبكة الجوال"
-
-                    // Calculate or look up threadId
                     val threadId = kotlin.math.abs(sender.hashCode().toLong())
 
-                    val entity = SmsEntity(
-                        threadId = threadId,
-                        address = sender,
-                        body = fullBody,
-                        date = timestamp,
-                        type = SmsEntity.TYPE_INBOX,
-                        subId = subId,
-                        carrierName = carrierName,
-                        deliveryStatus = 0,
-                        read = false,
-                        smsc = smsc
-                    )
-                    dao.insertMessage(entity)
-
-                    // Write to system provider if default app
+                    var systemSmsId: Long? = null
                     if (TelephonyManagerHelper.isDefaultSmsApp(context)) {
                         try {
                             val values = ContentValues().apply {
@@ -90,14 +83,35 @@ class SmsReceiver : BroadcastReceiver() {
                                     put(Telephony.Sms.SUBSCRIPTION_ID, subId)
                                 }
                             }
-                            context.contentResolver.insert(Uri.parse("content://sms/inbox"), values)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                            val insertedUri = context.contentResolver.insert(
+                                Uri.parse("content://sms/inbox"),
+                                values
+                            )
+                            if (insertedUri != null) {
+                                systemSmsId = ContentUris.parseId(insertedUri)
+                            }
+                        } catch (_: Exception) {
                         }
                     }
 
-                    // Display Notification
-                    val contactName = TelephonyManagerHelper.getContactName(context, sender)
+                    if (!dao.existsByContent(sender, timestamp, fullBody)) {
+                        val entity = SmsEntity(
+                            systemSmsId = systemSmsId,
+                            threadId = threadId,
+                            address = sender,
+                            body = fullBody,
+                            date = timestamp,
+                            type = SmsEntity.TYPE_INBOX,
+                            subId = subId,
+                            carrierName = carrierName,
+                            deliveryStatus = 0,
+                            read = false,
+                            smsc = smsc
+                        )
+                        dao.insertMessage(entity)
+                    }
+
+                    val contactName = ContactsHelper.getContactNameCached(context, sender)
                     NotificationHelper.showIncomingSmsNotification(
                         context = context,
                         senderNumber = sender,
@@ -111,5 +125,20 @@ class SmsReceiver : BroadcastReceiver() {
                 pendingResult.finish()
             }
         }
+    }
+
+    private fun extractSubscriptionId(intent: Intent): Int {
+        val keys = listOf(
+            "subscription",
+            "android.telephony.extra.SUBSCRIPTION_INDEX",
+            "simId",
+            "slot",
+            "com.android.phone.extra.slot"
+        )
+        for (key in keys) {
+            val value = intent.getIntExtra(key, -1)
+            if (value >= 0) return value
+        }
+        return -1
     }
 }

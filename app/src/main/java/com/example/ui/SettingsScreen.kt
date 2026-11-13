@@ -1,9 +1,16 @@
 package com.example.ui
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -12,14 +19,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.data.BlockedNumberEntity
-import com.example.model.SimInfo
+import com.example.ui.theme.DirectCallBlue
 import com.example.ui.theme.Sim1Color
 import com.example.ui.theme.Sim2Color
 import com.example.ui.theme.StatusDelivered
+import com.example.ui.theme.WhatsAppGreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +51,7 @@ fun SettingsScreen(
 ) {
     BackHandler { onBack() }
 
+    val context = LocalContext.current
     var customSmscInput by remember(uiState.customSmsc) { mutableStateOf(uiState.customSmsc) }
     var signatureInput by remember(uiState.signatureText) { mutableStateOf(uiState.signatureText) }
     var signatureEnabledState by remember(uiState.signatureEnabled) { mutableStateOf(uiState.signatureEnabled) }
@@ -142,9 +157,13 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (uiState.activeSimCards.isEmpty()) {
-                            Text("لم يتم العثور على شرائح نشطة. يُرجى منح صلاحية حالة الهاتف.")
+                            Text(
+                                text = "لا توجد شرائح اتصال نشطة مكتشفة حالياً، أو لم يتم منح صلاحية حالة الهاتف.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         } else {
-                            uiState.activeSimCards.forEachIndexed { idx, sim ->
+                            uiState.activeSimCards.forEach { sim ->
                                 val simColor = if (sim.simSlotIndex == 0) Sim1Color else Sim2Color
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -179,7 +198,7 @@ fun SettingsScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Text(
-                                            text = "مركز الرسائل المعتمد: ${sim.smscNumber ?: "تلقائي"}",
+                                            text = "مركز الرسائل (SMSC): ${sim.smscNumber ?: "تلقائي من الشريحة"}",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -200,7 +219,7 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "مركز الرسائل هو العنوان المسؤول عن توجيه وتسليم رسائل SMS عبر شبكة مشغل الاتصالات.",
+                            text = "اتركه فارغاً لاستخدام مركز الرسائل التلقائي الخاص بشريحة الاتصال، أو أدخل رقم مركز الرسائل لمشغل الشبكة يدوياً.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -208,8 +227,8 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = customSmscInput,
                             onValueChange = { customSmscInput = it },
-                            label = { Text("رقم مركز الرسائل (SMSC)") },
-                            placeholder = { Text("مثال: +966505032999 أو +20100000000") },
+                            label = { Text("رقم مركز الرسائل (SMSC) - اختياري") },
+                            placeholder = { Text("اتركه فارغاً للوضع التلقائي") },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -219,7 +238,10 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             FilledTonalButton(
-                                onClick = { onSaveCustomSmsc(customSmscInput) },
+                                onClick = {
+                                    onSaveCustomSmsc(customSmscInput)
+                                    Toast.makeText(context, "تم حفظ إعدادات مركز الرسائل", Toast.LENGTH_SHORT).show()
+                                },
                                 modifier = Modifier.testTag("save_smsc_button")
                             ) {
                                 Text("حفظ رقم المركز")
@@ -393,7 +415,13 @@ fun SettingsScreen(
                 }
             }
 
-            // 8. About TALAL SMS
+            // 8. Developer & Programmer Rights Section
+            item {
+                SettingsSectionHeader(title = "حقوق المبرمج والمطور", icon = Icons.Default.Code)
+                DeveloperRightsCard(context = context)
+            }
+
+            // 9. About TALAL SMS
             item {
                 SettingsSectionHeader(title = "حول TALAL SMS", icon = Icons.Default.Info)
                 Card(
@@ -404,7 +432,7 @@ fun SettingsScreen(
                         Text(text = "TALAL SMS v1.0", fontWeight = FontWeight.Bold)
                         Text(text = "اسم الحزمة: com.talalsms.com", style = MaterialTheme.typography.bodySmall)
                         Text(
-                            text = "تطبيق متكامل للرسائل القصيرة يدعم كافة الهواتف وجميع إصدارات أندرويد والشرائح المتعددة وتقارير التسليم.",
+                            text = "تطبيق رسمي متكامل للرسائل النصية يدعم جميع إصدارات أندرويد والشرائح المتعددة وتقارير التسليم ومركز الرسائل.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -424,7 +452,7 @@ fun SettingsScreen(
                     value = newBlockNumberInput,
                     onValueChange = { newBlockNumberInput = it },
                     label = { Text("رقم الهاتف أو المعرّف") },
-                    placeholder = { Text("+966XXXXXXXXX") },
+                    placeholder = { Text("أدخل الرقم المراد حظره") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -444,10 +472,168 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showAddBlockDialog = false }) {
-                    Text("إلغاء")
+                    Text("إغلاق")
                 }
             }
         )
+    }
+}
+
+@Composable
+fun DeveloperRightsCard(context: Context) {
+    val devNumber = "778215553"
+    val whatsappIntlNumber = "967778215553"
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("developer_rights_card")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "المبرمج والمطور: عبدالحميد داوؤد",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "رقم التواصل: $devNumber",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Direct Call Button
+                Button(
+                    onClick = { launchDirectCall(context, devNumber) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = DirectCallBlue,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("developer_call_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Call,
+                        contentDescription = "اتصال مباشر بالمطور",
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("اتصال مباشر", fontWeight = FontWeight.Bold)
+                }
+
+                // WhatsApp Button
+                Button(
+                    onClick = { launchWhatsApp(context, whatsappIntlNumber) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = WhatsAppGreen,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("developer_whatsapp_button")
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_whatsapp),
+                        contentDescription = "تواصل واتساب مع المطور",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("واتساب", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "جميع الحقوق محفوظة © المطور عبدالحميد داوؤد",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+fun launchDirectCall(context: Context, phoneNumber: String) {
+    val hasCallPerm = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.CALL_PHONE
+    ) == PackageManager.PERMISSION_GRANTED
+    try {
+        val action = if (hasCallPerm) Intent.ACTION_CALL else Intent.ACTION_DIAL
+        val intent = Intent(action, Uri.parse("tel:$phoneNumber")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(dialIntent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "تعذر فتح تطبيق الهاتف", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+fun launchWhatsApp(context: Context, intlPhoneNumber: String) {
+    val url = "https://wa.me/$intlPhoneNumber"
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("whatsapp://send?phone=$intlPhoneNumber")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(fallback)
+        } catch (_: Exception) {
+            Toast.makeText(context, "تطبيق واتساب غير مثبت على الجهاز", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
